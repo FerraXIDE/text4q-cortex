@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>text4q Cortex — Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0f0f13;
+    --surface:  #18181f;
+    --border:   #2a2a38;
+    --text:     #e2e0f0;
+    --muted:    #7a7890;
+    --purple:   #8b7fdd;
+    --purple-l: #b4aaee;
+    --teal:     #3ecfa5;
+    --amber:    #f0a030;
+    --red:      #e05555;
+    --blue:     #5599ee;
+    --green:    #4db87a;
+    --mono:     "JetBrains Mono", "Fira Code", monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .logo { font-size: 15px; font-weight: 600; color: var(--purple-l); letter-spacing: .02em; }
+  .logo span { color: var(--muted); font-weight: 400; }
+  .server-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--teal); }
+  .dot.err { background: var(--red); }
+
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 0; height: calc(100vh - 57px); }
+
+  /* ── Left: jobs panel ── */
+  .jobs-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border); overflow: hidden; }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: .75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .toolbar input[type=text] {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px;
+    outline: none;
+  }
+  .toolbar input[type=text]:focus { border-color: var(--purple); }
+  .toolbar select {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; font-size: 12px; cursor: pointer;
+  }
+  .btn {
+    background: var(--purple); color: #fff; border: none; border-radius: 6px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer; font-weight: 500;
+    transition: opacity .15s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn.sm { padding: 4px 10px; font-size: 12px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+  .btn.sm:hover { border-color: var(--purple); color: var(--purple-l); }
+
+  .jobs-list { flex: 1; overflow-y: auto; }
+
+  .job-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 80px 70px;
+    gap: 8px; align-items: center;
+    padding: .6rem 1rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .1s;
+  }
+  .job-row:hover { background: var(--surface); }
+  .job-row.selected { background: rgba(139,127,221,.1); border-left: 3px solid var(--purple); padding-left: calc(1rem - 3px); }
+
+  .job-id { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .job-text { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job-circuit { font-size: 11px; color: var(--muted); text-align: right; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 600; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
+  }
+  .badge.queued   { background: rgba(240,160,48,.12); color: var(--amber); }
+  .badge.running  { background: rgba(85,153,238,.12); color: var(--blue); }
+  .badge.done     { background: rgba(77,184,122,.12); color: var(--green); }
+  .badge.failed   { background: rgba(224,85,85,.12);  color: var(--red); }
+  .badge.cancelled{ background: rgba(122,120,144,.12);color: var(--muted); }
+
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; color: var(--muted); }
+  .empty-state .icon { font-size: 32px; opacity: .3; }
+
+  /* ── Right: detail panel ── */
+  .detail-panel { display: flex; flex-direction: column; overflow: hidden; }
+  .detail-header {
+    padding: .75rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  .detail-header h2 { font-size: 13px; font-weight: 600; color: var(--purple-l); }
+  .detail-body { flex: 1; overflow-y: auto; padding: 1rem; }
+
+  .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-bottom: 1rem; }
+  .meta-key { color: var(--muted); font-size: 12px; }
+  .meta-val { font-size: 12px; color: var(--text); font-family: var(--mono); }
+
+  .section-title { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; margin: 1rem 0 .5rem; }
+
+  /* Histogram */
+  .hist-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .hist-label { font-family: var(--mono); font-size: 12px; color: var(--purple-l); min-width: 60px; }
+  .hist-bar-bg { flex: 1; background: var(--border); border-radius: 2px; height: 8px; }
+  .hist-bar { background: var(--teal); height: 8px; border-radius: 2px; transition: width .4s ease; min-width: 2px; }
+  .hist-pct { font-size: 11px; color: var(--muted); min-width: 42px; text-align: right; }
+
+  /* QASM */
+  pre.qasm {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: .75rem; font-family: var(--mono); font-size: 11px; color: var(--teal);
+    white-space: pre-wrap; word-break: break-all; line-height: 1.7;
+    max-height: 300px; overflow-y: auto;
+  }
+
+  /* Stats bar */
+  .stats-bar {
+    display: flex; gap: 1rem; padding: .5rem 1rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0; font-size: 12px; color: var(--muted);
+  }
+  .stat { display: flex; align-items: center; gap: 5px; }
+  .stat strong { color: var(--text); }
+
+  /* Submit form */
+  .submit-form {
+    padding: .75rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--surface); display: flex; gap: 6px; flex-shrink: 0;
+  }
+  .submit-form input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; outline: none;
+  }
+  .submit-form input:focus { border-color: var(--purple); }
+
+  /* Spinner for running */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { width: 8px; height: 8px; border: 2px solid var(--blue); border-top-color: transparent; border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .no-detail { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted); gap: 6px; }
+  .no-detail .icon { font-size: 28px; opacity: .25; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">text4q <span>Cortex</span> — Dashboard</div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div class="server-status">
+      <div class="dot" id="dot"></div>
+      <span id="server-label">connecting…</span>
+    </div>
+    <input type="text" id="server-url" value="http://localhost:8000"
+           placeholder="Server URL" style="width:200px;padding:4px 8px;font-size:12px;
+           background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;outline:none">
+    <input type="text" id="api-key-input" value="dev-key-0000"
+           placeholder="API Key" style="width:130px;padding:4px 8px;font-size:12px;
+           background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;outline:none">
+  </div>
+</header>
+
+<main>
+  <!-- Left: jobs list -->
+  <div class="jobs-panel">
+    <div class="submit-form">
+      <input type="text" id="submit-text" placeholder='Submit a job: "Bell state 2 qubits"…' />
+      <select id="submit-backend" style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 8px;font-size:12px">
+        <option value="aer">aer</option>
+        <option value="ibm_quantum">ibm_quantum</option>
+      </select>
+      <button class="btn" onclick="submitJob()">Run</button>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" id="search" placeholder="Filter jobs…" oninput="renderJobs()" />
+      <select id="filter-status" onchange="renderJobs()">
+        <option value="">All</option>
+        <option value="queued">Queued</option>
+        <option value="running">Running</option>
+        <option value="done">Done</option>
+        <option value="failed">Failed</option>
+      </select>
+      <button class="btn sm" onclick="refresh()">Refresh</button>
+    </div>
+
+    <div class="jobs-list" id="jobs-list">
+      <div class="empty-state"><div class="icon">◎</div><span>No jobs yet</span></div>
+    </div>
+
+    <div class="stats-bar" id="stats-bar">
+      <div class="stat">Workers <strong id="s-workers">—</strong></div>
+      <div class="stat">Queued <strong id="s-queued">—</strong></div>
+      <div class="stat">Running <strong id="s-running">—</strong></div>
+      <div class="stat">Done <strong id="s-done">—</strong></div>
+      <div class="stat">Failed <strong id="s-failed">—</strong></div>
+    </div>
+  </div>
+
+  <!-- Right: detail -->
+  <div class="detail-panel">
+    <div class="detail-header"><h2>Job Detail</h2></div>
+    <div class="detail-body" id="detail-body">
+      <div class="no-detail"><div class="icon">◉</div><span>Select a job</span></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const state = { jobs: [], selected: null, pollTimer: null };
+
+function server()  { return document.getElementById('server-url').value.replace(/\/$/, ''); }
+function apiKey()  { return document.getElementById('api-key-input').value; }
+function headers() { return { 'x-api-key': apiKey(), 'Content-Type': 'application/json' }; }
+
+// ── API calls ──────────────────────────────────────────────────────────────
+
+async function apiFetch(path, opts={}) {
+  const r = await fetch(server() + path, { headers: headers(), ...opts });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+async function fetchJobs() {
+  const data = await apiFetch('/jobs?limit=50');
+  return data.jobs || [];
+}
+
+async function fetchStats() {
+  return apiFetch('/queue/stats');
+}
+
+async function fetchJob(id) {
+  return apiFetch(`/jobs/${id}`);
+}
+
+// ── Health poll ────────────────────────────────────────────────────────────
+
+async function checkHealth() {
+  try {
+    const h = await apiFetch('/health');
+    setServerStatus(true, `ok · v${h.version}`);
+    updateStats(h.queue);
+  } catch {
+    setServerStatus(false, 'unreachable');
+  }
+}
+
+function setServerStatus(ok, label) {
+  document.getElementById('dot').className = 'dot ' + (ok ? 'ok' : 'err');
+  document.getElementById('server-label').textContent = label;
+}
+
+function updateStats(q) {
+  document.getElementById('s-workers').textContent = q.workers;
+  document.getElementById('s-queued').textContent  = q.queued;
+  document.getElementById('s-running').textContent = q.running;
+  document.getElementById('s-done').textContent    = q.done;
+  document.getElementById('s-failed').textContent  = q.failed;
+}
+
+// ── Render jobs ────────────────────────────────────────────────────────────
+
+function renderJobs() {
+  const search = document.getElementById('search').value.toLowerCase();
+  const filter = document.getElementById('filter-status').value;
+  const list   = document.getElementById('jobs-list');
+
+  let jobs = state.jobs;
+  if (filter)  jobs = jobs.filter(j => j.status === filter);
+  if (search)  jobs = jobs.filter(j =>
+    j.text.toLowerCase().includes(search) ||
+    (j.circuit_type||'').toLowerCase().includes(search) ||
+    j.id.includes(search)
+  );
+
+  if (!jobs.length) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">◎</div><span>No matching jobs</span></div>`;
+    return;
+  }
+
+  list.innerHTML = jobs.map(j => `
+    <div class="job-row ${state.selected === j.id ? 'selected' : ''}" onclick="selectJob('${j.id}')">
+      <span class="job-id">${j.id.slice(0,8)}</span>
+      <span class="job-text" title="${j.text}">${j.text}</span>
+      <span class="job-circuit">${j.circuit_type || '—'}</span>
+      <span class="badge ${j.status}">${j.status === 'running' ? '<span class="spinner"></span> ' : ''}${j.status}</span>
+    </div>
+  `).join('');
+}
+
+// ── Job detail ─────────────────────────────────────────────────────────────
+
+async function selectJob(id) {
+  state.selected = id;
+  renderJobs();
+  await refreshDetail(id);
+}
+
+async function refreshDetail(id) {
+  if (!id) return;
+  try {
+    const j = await fetchJob(id);
+    renderDetail(j);
+    // Keep refreshing if running
+    if (j.status === 'running' || j.status === 'queued') {
+      setTimeout(() => refreshDetail(id), 800);
+    }
+  } catch(e) {
+    document.getElementById('detail-body').innerHTML =
+      `<p style="color:var(--red);font-size:12px">Error: ${e.message}</p>`;
+  }
+}
+
+function renderDetail(j) {
+  const db = document.getElementById('detail-body');
+  const dur = j.duration_ms != null ? `${j.duration_ms.toFixed(0)} ms` : '—';
+
+  let html = `
+    <div class="meta-grid">
+      <span class="meta-key">ID</span>      <span class="meta-val">${j.id}</span>
+      <span class="meta-key">Status</span>  <span class="meta-val"><span class="badge ${j.status}">${j.status}</span></span>
+      <span class="meta-key">Circuit</span> <span class="meta-val">${j.circuit_type || '—'}</span>
+      <span class="meta-key">Qubits</span>  <span class="meta-val">${j.num_qubits ?? '—'}</span>
+      <span class="meta-key">Shots</span>   <span class="meta-val">${j.shots}</span>
+      <span class="meta-key">Backend</span> <span class="meta-val">${j.backend}</span>
+      <span class="meta-key">Time</span>    <span class="meta-val">${dur}</span>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:1rem;word-break:break-word">${j.text}</div>
+  `;
+
+  if (j.counts && Object.keys(j.counts).length) {
+    const total = Object.values(j.counts).reduce((a,b)=>a+b,0);
+    const sorted = Object.entries(j.counts).sort((a,b)=>b[1]-a[1]);
+    const max = sorted[0][1];
+    html += `<div class="section-title">Measurement results</div>`;
+    html += sorted.map(([state, count]) => {
+      const pct = (count/total*100).toFixed(1);
+      const w   = (count/max*100).toFixed(1);
+      return `<div class="hist-row">
+        <span class="hist-label">|${state}⟩</span>
+        <div class="hist-bar-bg"><div class="hist-bar" style="width:${w}%"></div></div>
+        <span class="hist-pct">${pct}%</span>
+      </div>`;
+    }).join('');
+  }
+
+  if (j.qasm) {
+    html += `<div class="section-title">OpenQASM 3.0</div><pre class="qasm">${escHtml(j.qasm)}</pre>`;
+  }
+
+  if (j.error) {
+    html += `<div class="section-title" style="color:var(--red)">Error</div>
+             <pre style="color:var(--red);font-size:11px;white-space:pre-wrap">${escHtml(j.error)}</pre>`;
+  }
+
+  db.innerHTML = html;
+}
+
+// ── Submit ─────────────────────────────────────────────────────────────────
+
+async function submitJob() {
+  const text = document.getElementById('submit-text').value.trim();
+  if (!text) return;
+  const backend = document.getElementById('submit-backend').value;
+  try {
+    const resp = await apiFetch('/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ text, backend, shots: 1024 }),
+    });
+    document.getElementById('submit-text').value = '';
+    await refresh();
+    selectJob(resp.job_id);
+  } catch(e) {
+    alert('Submit failed: ' + e.message);
+  }
+}
+
+document.getElementById('submit-text').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitJob();
+});
+
+// ── Refresh loop ───────────────────────────────────────────────────────────
+
+async function refresh() {
+  try {
+    const [jobs] = await Promise.all([fetchJobs(), checkHealth()]);
+    state.jobs = jobs;
+    renderJobs();
+    if (state.selected) await refreshDetail(state.selected);
+  } catch {}
+}
+
+function startAutoRefresh(interval = 3000) {
+  clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(refresh, interval);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+
+refresh();
+startAutoRefresh(3000);
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+
+</body>
+</html>
