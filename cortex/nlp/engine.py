@@ -248,3 +248,43 @@ h q[0];
 
 c = measure q;
 """
+
+
+# ── Sequential parser integration ────────────────────────────────────────────
+
+def is_sequential(text: str) -> bool:
+    """
+    Detect whether a text is a sequential gate command
+    rather than a named circuit type (Bell, GHZ, etc).
+
+    Returns True if the text contains explicit gate names
+    and qubit indices, suggesting free-form composition.
+    """
+    from cortex.nlp.sequential import _GATE_RE, _QUBIT_IDX_RE, _FROM_TO_RE
+    has_gate   = bool(_GATE_RE.search(text))
+    has_qubits = bool(_QUBIT_IDX_RE.search(text) or _FROM_TO_RE.search(text))
+    is_named   = bool(_detect_circuit_type(text) != "custom")
+    return has_gate and has_qubits and not is_named
+
+
+def parse_sequential_intent(text: str) -> tuple[CircuitIntent, str]:
+    """
+    Parse a sequential command string into (CircuitIntent, qasm).
+    Used when is_sequential() returns True.
+    """
+    from cortex.nlp.sequential import parse_and_compile
+    result, qasm = parse_and_compile(text)
+
+    intent = CircuitIntent(
+        raw_text=text,
+        num_qubits=result.num_qubits,
+        circuit_type="sequential",
+        shots=_extract_shots(text),
+        noise_model=_extract_noise(text),
+        metadata={
+            "sequential": True,
+            "n_commands": len(result.commands),
+            "warnings": result.warnings,
+        },
+    )
+    return intent, qasm

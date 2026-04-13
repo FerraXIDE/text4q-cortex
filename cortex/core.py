@@ -91,8 +91,13 @@ class Cortex:
         """
         Full pipeline: parse → compile → execute.
 
+        Automatically detects the input type:
+        - Named circuits (Bell, GHZ, QFT...) → pattern engine
+        - Sequential commands (Apply H to qubit 0, CNOT from 0 to 1...) → sequential parser
+        - Arbitrary descriptions with llm mode → LLM engine
+
         Args:
-            text: Natural language circuit description (any complexity in llm mode).
+            text: Natural language circuit description.
 
         Returns:
             CortexResult with counts, QASM, and metadata.
@@ -100,8 +105,12 @@ class Cortex:
         if self._llm_engine:
             intent, qasm = self._llm_engine.translate(text)
         else:
-            intent = parse_intent(text)
-            qasm   = intent_to_qasm(intent)
+            from cortex.nlp.engine import is_sequential, parse_sequential_intent
+            if is_sequential(text):
+                intent, qasm = parse_sequential_intent(text)
+            else:
+                intent = parse_intent(text)
+                qasm   = intent_to_qasm(intent)
 
         return self._connector.execute(intent, qasm)
 
