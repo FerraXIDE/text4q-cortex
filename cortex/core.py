@@ -89,7 +89,7 @@ class Cortex:
 
     def run(self, text: str) -> CortexResult:
         """
-        Full pipeline: parse → compile → execute.
+        Full pipeline: validate → parse → compile → execute.
 
         Automatically detects the input type:
         - Named circuits (Bell, GHZ, QFT...) → pattern engine
@@ -101,18 +101,58 @@ class Cortex:
 
         Returns:
             CortexResult with counts, QASM, and metadata.
-        """
-        if self._llm_engine:
-            intent, qasm = self._llm_engine.translate(text)
-        else:
-            from cortex.nlp.engine import is_sequential, parse_sequential_intent
-            if is_sequential(text):
-                intent, qasm = parse_sequential_intent(text)
-            else:
-                intent = parse_intent(text)
-                qasm   = intent_to_qasm(intent)
 
-        return self._connector.execute(intent, qasm)
+        Raises:
+            CortexValidationError: If the input is invalid (empty, bad qubit count, etc).
+        """
+        from cortex.nlp.validator import validate_all, validate_text_only, CortexValidationError
+
+        # Layer 1: validate text before anything else
+        validate_text_only(text)
+
+        try:
+            if self._llm_engine:
+                intent, qasm = self._llm_engine.translate(text)
+            else:
+                from cortex.nlp.engine import is_sequential, parse_sequential_intent
+                if is_sequential(text):
+                    intent, qasm = parse_sequential_intent(text)
+                else:
+                    intent = parse_intent(text)
+                    qasm   = intent_to_qasm(intent)
+
+            # Layers 2-4: validate intent + QASM
+            warnings = validate_all(
+                text, intent, qasm,
+                backend=self.backend.value,
+            )
+
+            result = self._connector.execute(intent, qasm)
+
+            # Attach warnings to result metadata
+            if warnings:
+                intent.metadata["warnings"] = [w.user_message for w in warnings]
+
+            return result
+
+        except CortexValidationError:
+            raise
+        except Exception as exc:
+            # Wrap unexpected errors into a clean CortexResult
+            from cortex.models import CortexResult, CircuitIntent
+            fallback_intent = CircuitIntent(
+                raw_text=text, num_qubits=0,
+                circuit_type="unknown", shots=0,
+            )
+            return CortexResult(
+                intent=fallback_intent,
+                qasm="",
+                counts={},
+                backend=self.backend.value,
+                shots=0,
+                execution_time_ms=0.0,
+                error=str(exc),
+            )
 
     def info(self) -> dict:
         """Return current configuration as a dict."""
