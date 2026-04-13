@@ -5,6 +5,7 @@ Main Cortex class — the single entry point for users.
 
 v0.1: pattern-based NLP engine
 v0.2: LLM-powered engine with v0.1 fallback
+v0.8: circuit optimization + intelligent error validation
 """
 
 from __future__ import annotations
@@ -19,9 +20,14 @@ class Cortex:
     text4q Cortex — natural language quantum computing interface.
 
     Examples:
-        # Local simulation, pattern engine (no credentials needed)
+        # Local simulation (no credentials needed)
         cx = Cortex(backend="aer")
         result = cx.run("Bell state with 2 qubits")
+
+        # With circuit optimization
+        cx = Cortex(backend="aer", optimize=2)
+        result = cx.run("Apply H H to qubit 0, CNOT from 0 to 1, measure all")
+        print(result.intent.metadata["optimization"])
 
         # LLM engine: accepts ANY circuit description
         cx = Cortex(backend="aer", nlp="llm", llm_backend="anthropic")
@@ -41,9 +47,11 @@ class Cortex:
         nlp: Literal["pattern", "llm"] = "pattern",
         llm_backend: Literal["anthropic", "openai"] = "anthropic",
         llm_model: str | None = None,
+        optimize: int = 1,
     ):
         self.backend = Backend(backend)
         self.nlp_mode = nlp
+        self._optimize_level = optimize
         self._connector = connector or self._build_connector(token, backend_name)
         self._llm_engine = None
 
@@ -87,9 +95,25 @@ class Cortex:
         intent = parse_intent(text_or_intent)
         return intent_to_qasm(intent)
 
+    def optimize(self, qasm: str, level: int | None = None) -> str:
+        """
+        Optimize a QASM circuit string, removing redundant gates.
+
+        Args:
+            qasm:  OpenQASM 3.0 string to optimize.
+            level: Override the instance optimize level (0-3).
+
+        Returns:
+            Optimized OpenQASM 3.0 string.
+        """
+        from cortex.nlp.optimizer import optimize_qasm
+        lvl = level if level is not None else self._optimize_level
+        result = optimize_qasm(qasm, backend=self.backend.value, level=lvl)
+        return result.optimized_qasm
+
     def run(self, text: str) -> CortexResult:
         """
-        Full pipeline: validate → parse → compile → execute.
+        Full pipeline: validate → parse → compile → optimize → execute.
 
         Automatically detects the input type:
         - Named circuits (Bell, GHZ, QFT...) → pattern engine
@@ -103,7 +127,7 @@ class Cortex:
             CortexResult with counts, QASM, and metadata.
 
         Raises:
-            CortexValidationError: If the input is invalid (empty, bad qubit count, etc).
+            CortexValidationError: If the input is invalid.
         """
         from cortex.nlp.validator import validate_all, validate_text_only, CortexValidationError
 
@@ -127,6 +151,19 @@ class Cortex:
                 backend=self.backend.value,
             )
 
+            # Circuit optimization
+            if self._optimize_level > 0:
+                from cortex.nlp.optimizer import optimize_qasm
+                opt = optimize_qasm(qasm, backend=self.backend.value, level=self._optimize_level)
+                qasm = opt.optimized_qasm
+                intent.metadata["optimization"] = {
+                    "gates_before":   opt.original_gates,
+                    "gates_after":    opt.optimized_gates,
+                    "removed":        opt.gates_removed,
+                    "reduction_pct":  opt.reduction_pct,
+                    "method":         opt.method,
+                }
+
             result = self._connector.execute(intent, qasm)
 
             # Attach warnings to result metadata
@@ -138,8 +175,6 @@ class Cortex:
         except CortexValidationError:
             raise
         except Exception as exc:
-            # Wrap unexpected errors into a clean CortexResult
-            from cortex.models import CortexResult, CircuitIntent
             fallback_intent = CircuitIntent(
                 raw_text=text, num_qubits=0,
                 circuit_type="unknown", shots=0,
@@ -157,12 +192,14 @@ class Cortex:
     def info(self) -> dict:
         """Return current configuration as a dict."""
         return {
-            "version": "0.2.0-alpha",
-            "backend": self.backend.value,
-            "nlp_mode": self.nlp_mode,
-            "llm_backend": self._llm_engine.backend_name if self._llm_engine else None,
+            "version":        "0.1.5",
+            "backend":        self.backend.value,
+            "nlp_mode":       self.nlp_mode,
+            "optimize_level": self._optimize_level,
+            "llm_backend":    self._llm_engine.backend_name if self._llm_engine else None,
         }
 
     def __repr__(self) -> str:
         nlp = f", nlp={self.nlp_mode!r}" if self.nlp_mode != "pattern" else ""
-        return f"Cortex(backend={self.backend.value!r}{nlp})"
+        opt = f", optimize={self._optimize_level}" if self._optimize_level != 1 else ""
+        return f"Cortex(backend={self.backend.value!r}{nlp}{opt})"
