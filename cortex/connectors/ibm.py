@@ -1,8 +1,12 @@
 """
 cortex.connectors.ibm
 =====================
-IBM Quantum connector using qiskit-ibm-runtime.
-Supports both real QPU execution and local Aer simulation.
+IBM Quantum connector for text4q Cortex.
+Supports both real QPU execution (ibm_quantum_platform) and local Aer simulation.
+
+Tested on:
+    qiskit-ibm-runtime == 0.46.1
+    ibm_fez, ibm_marrakesh, ibm_kingston (156 qubits, Eagle r3)
 """
 
 from __future__ import annotations
@@ -13,11 +17,18 @@ from cortex.models import CortexResult, CircuitIntent
 
 
 class IBMQuantumConnector:
+    """
+    Connects text4q Cortex to IBM Quantum backends.
+
+    Usage:
+        connector = IBMQuantumConnector(token="YOUR_TOKEN", backend_name="ibm_fez")
+        # or set env var IBM_QUANTUM_TOKEN
+    """
 
     def __init__(
         self,
         token: str | None = None,
-        backend_name: str = "ibm_brisbane",
+        backend_name: str = "ibm_fez",
         use_simulator: bool = False,
     ):
         self.token = token or os.environ.get("IBM_QUANTUM_TOKEN", "")
@@ -38,7 +49,7 @@ class IBMQuantumConnector:
         try:
             from qiskit_ibm_runtime import QiskitRuntimeService
             self._service = QiskitRuntimeService(
-                channel="ibm_quantum",
+                channel="ibm_quantum_platform",
                 token=self.token,
             )
             self._backend = self._service.backend(self.backend_name)
@@ -85,29 +96,29 @@ class IBMQuantumConnector:
             )
 
     def _run_qasm(self, qasm: str, shots: int) -> tuple[dict[str, int], str | None]:
-        # Use qiskit.qasm3.loads() — native QASM 3.0 support
         from qiskit import qasm3
+
         circuit = qasm3.loads(qasm)
 
         if self.use_simulator:
             from qiskit_aer import AerSimulator
-            sim: AerSimulator = self._backend  # type: ignore
+            sim: AerSimulator = self._backend
             result = sim.run(circuit, shots=shots).result()
             counts = result.get_counts()
             return {k: v for k, v in counts.items()}, None
 
-        # Real IBM Quantum execution via Sampler primitive
-        from qiskit_ibm_runtime import SamplerV2 as Sampler
+        # Real IBM Quantum — use Batch (available on Open plan)
+        from qiskit_ibm_runtime import SamplerV2 as Sampler, Batch
         from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
-        pm = generate_preset_pass_manager(
-            optimization_level=1,
-            backend=self._backend,
-        )
+        pm = generate_preset_pass_manager(optimization_level=1, backend=self._backend)
         isa_circuit = pm.run(circuit)
-        sampler = Sampler(backend=self._backend)
-        job = sampler.run([isa_circuit], shots=shots)
-        result = job.result()
+
+        with Batch(backend=self._backend) as batch:
+            sampler = Sampler(mode=batch)
+            job = sampler.run([isa_circuit], shots=shots)
+            result = job.result()
+
         pub_result = result[0]
         counts_raw = pub_result.data.c.get_counts()
         return counts_raw, job.job_id()
