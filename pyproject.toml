@@ -4,28 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text4q-cortex"
-version = "0.1.7"
+version = "0.1.8"
 description = "Natural language interface for quantum computing infrastructure"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [
-  { name = "text4q Cortex Contributors" }
+  { name = "Gabriel Sanchez Ferra", email = "gabrielsanchezferra@gmail.com" }
 ]
-keywords = ["quantum computing", "nlp", "qiskit", "openqasm", "orchestration"]
+keywords = ["quantum computing", "nlp", "qiskit", "openqasm", "qaoa", "orchestration"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Physics",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 dependencies = [
-  "qiskit>=1.0",
-  "qiskit-ibm-runtime>=0.20",
-  "pennylane>=0.35",
-  "openai>=1.0",          # LLM backend for NLP engine (optional fallback)
   "pydantic>=2.0",
   "typer>=0.9",
   "rich>=13.0",
@@ -34,27 +34,46 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+qiskit = [
+  "qiskit>=1.0",
+  "qiskit-ibm-runtime>=0.20",
+  "qiskit-aer>=0.13",
+]
+cloud = [
+  "fastapi>=0.100",
+  "uvicorn>=0.23",
+]
+llm = [
+  "openai>=1.0",
+  "anthropic>=0.20",
+]
+all = [
+  "qiskit>=1.0",
+  "qiskit-ibm-runtime>=0.20",
+  "qiskit-aer>=0.13",
+  "fastapi>=0.100",
+  "uvicorn>=0.23",
+  "openai>=1.0",
+  "anthropic>=0.20",
+]
 dev = [
   "pytest>=7.0",
   "pytest-asyncio>=0.23",
   "ruff>=0.1",
   "mypy>=1.0",
-  "pre-commit>=3.0",
-]
-aer = [
-  "qiskit-aer>=0.13",
 ]
 
+[project.urls]
+Homepage = "https://github.com/FerraXIDE/text4q-cortex"
+Repository = "https://github.com/FerraXIDE/text4q-cortex"
+"Bug Tracker" = "https://github.com/FerraXIDE/text4q-cortex/issues"
+
 [project.scripts]
-cortex = "cortex.cli:app"
+cortex = "cortex.cli:main"
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
