@@ -54,6 +54,8 @@ class Cortex:
         self._optimize_level = optimize
         self._connector = connector or self._build_connector(token, backend_name)
         self._llm_engine = None
+        self._in_session = False
+        self._session_state = None
 
         if nlp == "llm":
             self._llm_engine = self._build_llm_engine(llm_backend, llm_model)
@@ -129,6 +131,10 @@ class Cortex:
         Raises:
             CortexValidationError: If the input is invalid.
         """
+        # If inside a conversational session, delegate to session handler
+        if self._in_session:
+            return self._run_in_session(text)
+
         from cortex.nlp.validator import validate_all, validate_text_only, CortexValidationError
 
         # Layer 1: validate text before anything else
@@ -203,3 +209,172 @@ class Cortex:
         nlp = f", nlp={self.nlp_mode!r}" if self.nlp_mode != "pattern" else ""
         opt = f", optimize={self._optimize_level}" if self._optimize_level != 1 else ""
         return f"Cortex(backend={self.backend.value!r}{nlp}{opt})"
+
+
+    # ── Session / conversational mode ─────────────────────────────────────────
+
+    def session(self):
+        """
+        Start a conversational session. Use as context manager:
+
+            with cx.session():
+                cx.run("Create 3 qubits")
+                cx.run("Apply H to qubit 0")
+                cx.run("CNOT from 0 to 1")
+                result = cx.run("measure all")
+        """
+        from cortex.session import CortexSession
+        return CortexSession(self)
+
+    def _start_session(self) -> None:
+        from cortex.session import SessionState
+        self._session_state = SessionState()
+        self._in_session = True
+
+    def _end_session(self) -> None:
+        self._session_state = None
+        self._in_session = False
+
+    def _run_in_session(self, text: str):
+        """Handle a run() call while inside a conversational session."""
+        from cortex.session import (
+            classify_session_command, SessionCommand,
+            SessionResponse, SessionState,
+        )
+        from cortex.nlp.sequential import parse_sequential
+
+        state: SessionState = self._session_state
+        cmd_type, extra = classify_session_command(text)
+
+        # ── Set qubit count ───────────────────────────────────────────────────
+        if cmd_type == SessionCommand.SET_QUBITS:
+            state.num_qubits = extra
+            state.history.append(text)
+            return SessionResponse(
+                kind="ack",
+                message=f"Circuit initialized with {extra} qubits. "
+                        f"Start adding gates.",
+                gate_count=state.gate_count,
+            )
+
+        # ── Show diagram ──────────────────────────────────────────────────────
+        if cmd_type == SessionCommand.SHOW:
+            diagram = state.diagram()
+            return SessionResponse(
+                kind="info",
+                message=f"Current circuit ({state.gate_count} gates, "
+                        f"{state.num_qubits} qubits):\n\n{diagram}",
+                gate_count=state.gate_count,
+            )
+
+        # ── Undo last gate ────────────────────────────────────────────────────
+        if cmd_type == SessionCommand.UNDO:
+            removed = state.undo()
+            if removed:
+                return SessionResponse(
+                    kind="ack",
+                    message=f"Removed: {removed}. "
+                            f"Circuit now has {state.gate_count} gates.",
+                    gate_count=state.gate_count,
+                )
+            return SessionResponse(
+                kind="ack",
+                message="Nothing to undo.",
+                gate_count=0,
+            )
+
+        # ── Reset ─────────────────────────────────────────────────────────────
+        if cmd_type == SessionCommand.RESET:
+            n = state.num_qubits
+            state.reset()
+            return SessionResponse(
+                kind="ack",
+                message=f"Circuit reset. {n} qubits ready for new gates.",
+                gate_count=0,
+            )
+
+        # ── Gate count ────────────────────────────────────────────────────────
+        if cmd_type == SessionCommand.GATE_COUNT:
+            return SessionResponse(
+                kind="info",
+                message=f"The circuit has {state.gate_count} gate(s) "
+                        f"on {state.num_qubits} qubit(s).",
+                gate_count=state.gate_count,
+            )
+
+        # ── Status ────────────────────────────────────────────────────────────
+        if cmd_type == SessionCommand.STATUS:
+            return SessionResponse(
+                kind="info",
+                message=f"Session active — {state.gate_count} gate(s), "
+                        f"{state.num_qubits} qubit(s). "
+                        f"Say 'measure all' to execute.",
+                gate_count=state.gate_count,
+            )
+
+        # ── Measure — execute accumulated circuit ─────────────────────────────
+        if cmd_type == SessionCommand.MEASURE:
+            if state.gate_count == 0:
+                return SessionResponse(
+                    kind="error",
+                    message="No gates to execute. Add gates first.",
+                    gate_count=0,
+                )
+            qasm = state.build_qasm(include_measure=True)
+            from cortex.models import CircuitIntent
+            intent = CircuitIntent(
+                raw_text="session",
+                num_qubits=state.num_qubits or 2,
+                circuit_type="session",
+                shots=1024,
+                metadata={"session": True, "history": list(state.history)},
+            )
+            result = self._connector.execute(intent, qasm)
+            state.executed = True
+            return SessionResponse(
+                kind="result",
+                message=f"Executed {state.gate_count} gates. "
+                        f"Top result: |{result.most_probable()}⟩",
+                result=result,
+                gate_count=state.gate_count,
+            )
+
+        # ── Add gate ──────────────────────────────────────────────────────────
+        if cmd_type == SessionCommand.ADD_GATE:
+            # Auto-detect qubit count from gate if not set
+            parsed = parse_sequential(text)
+            if not parsed.valid:
+                return SessionResponse(
+                    kind="error",
+                    message=f"Could not parse: {parsed.errors[0] if parsed.errors else text}",
+                    gate_count=state.gate_count,
+                )
+
+            # Update qubit count if needed
+            if parsed.num_qubits > state.num_qubits:
+                state.num_qubits = parsed.num_qubits
+
+            # Extract just the gate lines from parsed result
+            from cortex.session import SessionState
+            from cortex.nlp.sequential import sequential_to_qasm, GateCommand
+            for cmd in parsed.commands:
+                if isinstance(cmd, GateCommand):
+                    state.add_gate(cmd.to_qasm())
+
+            state.history.append(text)
+            added = len([c for c in parsed.commands
+                        if hasattr(c, 'gate')])
+            return SessionResponse(
+                kind="ack",
+                message=f"Added {added} gate(s). "
+                        f"Circuit has {state.gate_count} gate(s) total. "
+                        f"Say 'measure all' to execute or keep adding gates.",
+                gate_added=text,
+                gate_count=state.gate_count,
+            )
+
+        return SessionResponse(
+            kind="error",
+            message=f"Command not recognized in session context: '{text}'",
+            gate_count=state.gate_count,
+        )
